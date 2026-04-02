@@ -1,0 +1,42 @@
+{
+  "id": "openclaw-openroom-bridge",
+  "name": "OpenClaw OpenRoom Bridge",
+  "description": "Bridge OpenClaw to local OpenRoom APIs and lifecycle",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "baseUrl": {
+        "type": "string"
+      },
+      "requestTimeoutSec": {
+        "type": "number",
+        "minimum": 2,
+        "maximum": 120
+      },
+      "openRoomDir": {
+        "type": "string"
+      },
+      "devCommand": {
+        "type": "string"
+      },
+      "logFile": {
+        "type": "string"
+      },
+      "pidFile": {
+        "type": "string"
+      },
+      "autoStartOnHealthCheck": {
+        "type": "boolean"
+      },
+      "startupWaitSec": {
+        "type": "number",
+        "minimum": 5,
+        "maximum": 180
+      }
+    }
+  }
+}

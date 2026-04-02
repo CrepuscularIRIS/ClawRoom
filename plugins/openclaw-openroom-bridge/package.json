@@ -1,0 +1,16 @@
+{
+  "name": "openclaw-openroom-bridge",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin bridge for local OpenRoom API",
+  "type": "module",
+  "license": "MIT",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.22",
+      "minGatewayVersion": "2026.3.22"
+    }
+  }
+}
