@@ -1,0 +1,612 @@
+diff --git a/apps/webuiapps/src/components/ChatPanel/index.module.scss b/apps/webuiapps/src/components/ChatPanel/index.module.scss
+index 96d49a2..29b8f14 100644
+--- a/apps/webuiapps/src/components/ChatPanel/index.module.scss
++++ b/apps/webuiapps/src/components/ChatPanel/index.module.scss
+@@ -77,6 +77,50 @@
+   gap: 8px;
+ }
+ 
++.routerControls {
++  display: flex;
++  align-items: center;
++  gap: 6px;
++}
++
++.routerToggle {
++  border: 1px solid rgba(255, 255, 255, 0.18);
++  background: transparent;
++  color: rgba(255, 255, 255, 0.75);
++  border-radius: 6px;
++  padding: 4px 8px;
++  font-size: 11px;
++  line-height: 1;
++  cursor: pointer;
++
++  &:hover {
++    border-color: rgba(255, 255, 255, 0.34);
++    color: rgba(255, 255, 255, 0.92);
++  }
++}
++
++.routerToggleOn {
++  border-color: rgba(250, 234, 95, 0.56);
++  color: #faea5f;
++  background: rgba(250, 234, 95, 0.12);
++}
++
++.routerAgentSelect {
++  min-width: 92px;
++  background: #282a2a;
++  border: 1px solid rgba(255, 255, 255, 0.14);
++  color: rgba(255, 255, 255, 0.86);
++  border-radius: 6px;
++  padding: 4px 8px;
++  font-size: 11px;
++  cursor: pointer;
++
++  &:focus {
++    outline: none;
++    border-color: rgba(250, 234, 95, 0.5);
++  }
++}
++
+ /* ---- Stage Indicator ---- */
+ 
+ .stageIndicator {
+diff --git a/apps/webuiapps/src/components/ChatPanel/index.tsx b/apps/webuiapps/src/components/ChatPanel/index.tsx
+index 740488c..41b0575 100644
+--- a/apps/webuiapps/src/components/ChatPanel/index.tsx
++++ b/apps/webuiapps/src/components/ChatPanel/index.tsx
+@@ -52,6 +52,13 @@ import {
+   isImageGenTool,
+   executeImageGenTool,
+ } from '@/lib/imageGenTools';
++import {
++  getOpenClawToolDefinitions,
++  isOpenClawTool,
++  executeOpenClawToolDetailed,
++  MAIN_AGENTS,
++  type MainAgentId,
++} from '@/lib/openclawAgentTools';
+ import {
+   loadChatHistory,
+   loadChatHistorySync,
+@@ -203,6 +210,11 @@ Rules:
+ - NEVER invent or guess file paths. ALL file_write paths MUST exactly follow the directory structure in guide.md. For example, if guide.md defines entries under "/entries/{id}.json", you MUST write to "apps/{appName}/data/entries/{id}.json" — NOT to "apps/{appName}/data/{id}.json" or any other path.
+ - NAS paths in guide.md like "/articles/xxx.json" map to "apps/{appName}/data/articles/xxx.json". This prefix rule applies to ALL paths — always preserve the full subdirectory structure from guide.md.
+ 
++OpenClaw delegation:
++- You can delegate complex tasks to OpenClaw main agents using delegate_to_main_agent.
++- Agent roles: lacia=orchestrator/planning, methode=coding implementation, kouka=delivery/content packaging, snowdrop=research/synthesis, satonus=security/audit.
++- Use delegation for heavy tasks, then summarize and continue assisting the user in this chat.
++
+ When you receive "[User performed action in ... (appName: xxx)]", the appName is already provided. Read its meta.yaml to understand available actions, then respond accordingly. For games, respond with your own move — think strategically.
+ 
+ IMPORTANT: You MUST use the respond_to_user tool to send all messages to the user. Do NOT output plain text responses. Include your emotion and 3 suggested replies.${hasImageGen ? '\n\nYou can use generate_image to create images from text prompts. The generated image will be displayed in chat.' : ''}`;
+@@ -389,6 +401,10 @@ const ChatPanel: React.FC<{
+   zIndex?: number;
+   onFocus?: () => void;
+ }> = ({ onClose, visible = true, zIndex, onFocus }) => {
++  const ROUTER_ENABLED_KEY = 'openroom-openclaw-router-enabled';
++  const ROUTER_AGENT_KEY = 'openroom-openclaw-router-agent';
++  const ROUTER_SESSIONS_KEY = 'openroom-openclaw-router-sessions';
++
+   // Character + Mod state (collection-based)
+   const [charCollection, setCharCollection] = useState<CharacterCollection>(
+     () => loadCharacterCollectionSync() ?? DEFAULT_CHAR_COLLECTION,
+@@ -424,6 +440,36 @@ const ChatPanel: React.FC<{
+   const [imageGenConfig, setImageGenConfig] = useState<ImageGenConfig | null>(
+     loadImageGenConfigSync,
+   );
++  const [openClawRouterEnabled, setOpenClawRouterEnabled] = useState<boolean>(() => {
++    try {
++      return localStorage.getItem(ROUTER_ENABLED_KEY) === 'true';
++    } catch {
++      return false;
++    }
++  });
++  const [activeMainAgent, setActiveMainAgent] = useState<MainAgentId>(() => {
++    try {
++      const raw = (localStorage.getItem(ROUTER_AGENT_KEY) || '').trim().toLowerCase();
++      if (MAIN_AGENTS.includes(raw as MainAgentId)) {
++        return raw as MainAgentId;
++      }
++    } catch {
++      // ignore
++    }
++    return 'lacia';
++  });
++  const [openClawSessions, setOpenClawSessions] = useState<Partial<Record<MainAgentId, string>>>(
++    () => {
++      try {
++        const raw = localStorage.getItem(ROUTER_SESSIONS_KEY);
++        if (!raw) return {};
++        const parsed = JSON.parse(raw) as Partial<Record<MainAgentId, string>>;
++        return parsed && typeof parsed === 'object' ? parsed : {};
++      } catch {
++        return {};
++      }
++    },
++  );
+ 
+   // Suggested replies from latest assistant message
+   const [suggestedReplies, setSuggestedReplies] = useState<string[]>([]);
+@@ -558,6 +604,30 @@ const ChatPanel: React.FC<{
+     });
+   }, []);
+ 
++  useEffect(() => {
++    try {
++      localStorage.setItem(ROUTER_ENABLED_KEY, openClawRouterEnabled ? 'true' : 'false');
++    } catch {
++      // ignore
++    }
++  }, [openClawRouterEnabled]);
++
++  useEffect(() => {
++    try {
++      localStorage.setItem(ROUTER_AGENT_KEY, activeMainAgent);
++    } catch {
++      // ignore
++    }
++  }, [activeMainAgent]);
++
++  useEffect(() => {
++    try {
++      localStorage.setItem(ROUTER_SESSIONS_KEY, JSON.stringify(openClawSessions));
++    } catch {
++      // ignore
++    }
++  }, [openClawSessions]);
++
+   // Listen for mod collection changes from Shell (e.g. after mod generation)
+   useEffect(() => {
+     const handler = (e: Event) => {
+@@ -708,10 +778,6 @@ const ChatPanel: React.FC<{
+     async (overrideText?: string) => {
+       const text = overrideText ?? input.trim();
+       if (!text || loading) return;
+-      if (!hasUsableLLMConfig(config)) {
+-        setShowSettings(true);
+-        return;
+-      }
+ 
+       if (!overrideText) setInput('');
+       setSuggestedReplies([]);
+@@ -726,6 +792,102 @@ const ChatPanel: React.FC<{
+       const newHistory: ChatMessage[] = [...chatHistory, { role: 'user', content: text }];
+       setChatHistory(newHistory);
+ 
++      const routeToMainAgent = async (agent: MainAgentId, task: string) => {
++        setLoading(true);
++        try {
++          const result = await executeOpenClawToolDetailed({
++            agent,
++            task,
++            session_id: openClawSessions[agent],
++          });
++          if (!result.ok) {
++            throw new Error(result.error || 'OpenClaw delegation failed');
++          }
++          if (result.sessionId) {
++            setOpenClawSessions((prev) => ({ ...prev, [agent]: result.sessionId! }));
++          }
++          const content = result.text || '';
++          addMessage({
++            id: String(Date.now()),
++            role: 'assistant',
++            content,
++            toolCalls: [`delegate_to_main_agent(${agent})`],
++          });
++          setChatHistory((prev) => [...prev, { role: 'assistant', content }]);
++        } catch (err) {
++          const msg = err instanceof Error ? err.message : String(err);
++          addMessage({
++            id: String(Date.now()),
++            role: 'assistant',
++            content: `Error: ${msg}`,
++          });
++        } finally {
++          setLoading(false);
++        }
++      };
++
++      const cmdUse = text.match(/^\/oc\s+use\s+(lacia|methode|kouka|snowdrop|satonus)\s*$/i);
++      if (cmdUse) {
++        const agent = cmdUse[1].toLowerCase() as MainAgentId;
++        setOpenClawRouterEnabled(true);
++        setActiveMainAgent(agent);
++        addMessage({
++          id: String(Date.now()),
++          role: 'assistant',
++          content: `OpenClaw router enabled. Active agent: ${agent}`,
++        });
++        setChatHistory((prev) => [
++          ...prev,
++          { role: 'assistant', content: `OpenClaw router enabled. Active agent: ${agent}` },
++        ]);
++        return;
++      }
++
++      if (/^\/oc\s+off\s*$/i.test(text)) {
++        setOpenClawRouterEnabled(false);
++        addMessage({
++          id: String(Date.now()),
++          role: 'assistant',
++          content: 'OpenClaw router disabled. Back to local LLM mode.',
++        });
++        setChatHistory((prev) => [
++          ...prev,
++          { role: 'assistant', content: 'OpenClaw router disabled. Back to local LLM mode.' },
++        ]);
++        return;
++      }
++
++      if (/^\/oc\s+status\s*$/i.test(text)) {
++        const sid = openClawSessions[activeMainAgent] || '(none)';
++        const content = `Router=${openClawRouterEnabled ? 'on' : 'off'}, active=${activeMainAgent}, session=${sid}`;
++        addMessage({
++          id: String(Date.now()),
++          role: 'assistant',
++          content,
++        });
++        setChatHistory((prev) => [...prev, { role: 'assistant', content }]);
++        return;
++      }
++
++      const directOpenClawMatch = text.match(
++        /^\/oc\s+(lacia|methode|kouka|snowdrop|satonus)\s+([\s\S]+)$/i,
++      );
++      if (directOpenClawMatch) {
++        const [, agentRaw, taskRaw] = directOpenClawMatch;
++        await routeToMainAgent(agentRaw.toLowerCase() as MainAgentId, taskRaw.trim());
++        return;
++      }
++
++      if (openClawRouterEnabled) {
++        await routeToMainAgent(activeMainAgent, text);
++        return;
++      }
++
++      if (!hasUsableLLMConfig(config)) {
++        setShowSettings(true);
++        return;
++      }
++
+       setLoading(true);
+       try {
+         await runConversation(newHistory, config);
+@@ -740,7 +902,16 @@ const ChatPanel: React.FC<{
+         setLoading(false);
+       }
+     },
+-    [input, loading, config, chatHistory, addMessage],
++    [
++      input,
++      loading,
++      config,
++      chatHistory,
++      addMessage,
++      activeMainAgent,
++      openClawRouterEnabled,
++      openClawSessions,
++    ],
+   );
+ 
+   // Core conversation loop
+@@ -758,6 +929,7 @@ const ChatPanel: React.FC<{
+       getAppActionToolDefinition(),
+       ...getFileToolDefinitions(),
+       ...getMemoryToolDefinitions(),
++      ...getOpenClawToolDefinitions(),
+       ...(hasImageGen ? getImageGenToolDefinitions() : []),
+     ];
+ 
+@@ -971,6 +1143,46 @@ const ChatPanel: React.FC<{
+           continue;
+         }
+ 
++        // ---- OpenClaw main-agent delegation ----
++        if (isOpenClawTool(tc.function.name)) {
++          pendingToolCallsRef.current.push(`openclaw_delegate`);
++          try {
++            const delegateParams: Record<string, unknown> = { ...params };
++            const delegatedAgent =
++              typeof delegateParams.agent === 'string'
++                ? delegateParams.agent.trim().toLowerCase()
++                : '';
++            if (MAIN_AGENTS.includes(delegatedAgent as MainAgentId) && !delegateParams.session_id) {
++              const cachedSession = openClawSessions[delegatedAgent as MainAgentId];
++              if (cachedSession) {
++                delegateParams.session_id = cachedSession;
++              }
++            }
++
++            const result = await executeOpenClawToolDetailed(delegateParams);
++            const content = result.ok
++              ? result.text || ''
++              : `error: ${result.error || 'openclaw delegation failed'}`;
++            if (result.ok && result.agent && result.sessionId) {
++              setOpenClawSessions((prev) => ({ ...prev, [result.agent!]: result.sessionId! }));
++            }
++            currentMessages = [
++              ...currentMessages,
++              { role: 'tool', content, tool_call_id: tc.id },
++            ];
++          } catch (err) {
++            currentMessages = [
++              ...currentMessages,
++              {
++                role: 'tool',
++                content: `error: ${err instanceof Error ? err.message : String(err)}`,
++                tool_call_id: tc.id,
++              },
++            ];
++          }
++          continue;
++        }
++
+         // ---- app_action ----
+         if (tc.function.name === 'app_action') {
+           const strParams = params as Record<string, string>;
+@@ -1067,6 +1279,27 @@ const ChatPanel: React.FC<{
+               <ChevronRight size={14} style={{ color: 'rgba(255,255,255,0.4)' }} />
+             </div>
+             <div className={styles.headerActions}>
++              <div className={styles.routerControls}>
++                <button
++                  className={`${styles.routerToggle} ${openClawRouterEnabled ? styles.routerToggleOn : ''}`}
++                  onClick={() => setOpenClawRouterEnabled((prev) => !prev)}
++                  title="Toggle OpenClaw router mode"
++                >
++                  {openClawRouterEnabled ? 'Router On' : 'Router Off'}
++                </button>
++                <select
++                  className={styles.routerAgentSelect}
++                  value={activeMainAgent}
++                  onChange={(e) => setActiveMainAgent(e.target.value as MainAgentId)}
++                  title="Active OpenClaw main agent"
++                >
++                  {MAIN_AGENTS.map((agent) => (
++                    <option key={agent} value={agent}>
++                      {agent}
++                    </option>
++                  ))}
++                </select>
++              </div>
+               <div onClick={() => setShowModPanel(true)} style={{ cursor: 'pointer' }}>
+                 <StageIndicator modManager={modManager} />
+               </div>
+@@ -1106,7 +1339,9 @@ const ChatPanel: React.FC<{
+           <div className={styles.messages} data-testid="chat-messages">
+             {messages.length === 0 && (
+               <div className={styles.emptyState}>
+-                {hasUsableLLMConfig(config)
++                {openClawRouterEnabled
++                  ? `OpenClaw Router active -> ${activeMainAgent}`
++                  : hasUsableLLMConfig(config)
+                   ? `${character.character_name} is ready to chat...`
+                   : 'Click the gear icon to configure your LLM connection'}
+               </div>
+@@ -1154,7 +1389,11 @@ const ChatPanel: React.FC<{
+               value={input}
+               onChange={(e) => setInput(e.target.value)}
+               onKeyDown={handleKeyDown}
+-              placeholder="Type a message..."
++              placeholder={
++                openClawRouterEnabled
++                  ? `Route to ${activeMainAgent} (commands: /oc use <agent>, /oc off, /oc status)`
++                  : 'Type a message...'
++              }
+               rows={1}
+               disabled={loading}
+               data-testid="chat-input"
+diff --git a/apps/webuiapps/vite.config.ts b/apps/webuiapps/vite.config.ts
+index d2635e4..fb947d8 100644
+--- a/apps/webuiapps/vite.config.ts
++++ b/apps/webuiapps/vite.config.ts
+@@ -9,6 +9,8 @@ import { sentryVitePlugin } from '@sentry/vite-plugin';
+ import * as fs from 'fs';
+ import * as os from 'os';
+ import { join } from 'path';
++import { execFile } from 'child_process';
++import { promisify } from 'util';
+ import { generateLogFileName, createLogMiddleware } from './src/lib/logPlugin';
+ import { appGeneratorPlugin } from './src/lib/appGeneratorPlugin';
+ 
+@@ -16,6 +18,11 @@ const LLM_CONFIG_FILE = resolve(os.homedir(), '.openroom', 'config.json');
+ const SESSIONS_DIR = resolve(os.homedir(), '.openroom', 'sessions');
+ const CHARACTERS_FILE = resolve(os.homedir(), '.openroom', 'characters.json');
+ const MODS_FILE = resolve(os.homedir(), '.openroom', 'mods.json');
++const OPENCLAW_CMD = process.env.OPENCLAW_CMD || resolve(os.homedir(), 'claw', 'openclaw-local');
++const OPENCLAW_DEFAULT_WORKDIR = process.env.OPENCLAW_WORKDIR || resolve(os.homedir(), 'claw');
++const OPENCLAW_BRIDGE_TOKEN = process.env.OPENCLAW_BRIDGE_TOKEN || '';
++const OPENCLAW_ALLOWED_AGENTS = new Set(['lacia', 'methode', 'kouka', 'snowdrop', 'satonus']);
++const execFileAsync = promisify(execFile);
+ 
+ /** LLM config persistence plugin — reads/writes config to ~/.openroom/config.json */
+ function llmConfigPlugin(): Plugin {
+@@ -319,6 +326,175 @@ function llmProxyPlugin(): Plugin {
+   };
+ }
+ 
++function tryParseJson(raw: string): unknown | null {
++  try {
++    return JSON.parse(raw);
++  } catch {
++    return null;
++  }
++}
++
++function extractPayloadText(payload: unknown): string {
++  if (typeof payload !== 'object' || payload === null) return '';
++  const obj = payload as {
++    result?: { payloads?: Array<{ text?: string | null }> };
++  };
++  const payloads = Array.isArray(obj.result?.payloads) ? obj.result?.payloads : [];
++  for (const p of payloads) {
++    if (typeof p?.text === 'string' && p.text.trim()) {
++      return p.text.trim();
++    }
++  }
++  return '';
++}
++
++function isLoopbackAddress(address: string): boolean {
++  const normalized = address.replace(/^::ffff:/, '');
++  return normalized === '127.0.0.1' || normalized === '::1' || normalized === 'localhost';
++}
++
++/** OpenClaw Agent bridge plugin — dispatch to local OpenClaw main agents */
++function openClawAgentBridgePlugin(): Plugin {
++  return {
++    name: 'openclaw-agent-bridge',
++    configureServer(server) {
++      server.middlewares.use('/api/openclaw-agent', (req, res) => {
++        res.setHeader('Content-Type', 'application/json');
++
++        if (req.method !== 'POST') {
++          res.writeHead(405);
++          res.end(JSON.stringify({ ok: false, error: 'Method not allowed' }));
++          return;
++        }
++
++        const chunks: Buffer[] = [];
++        req.on('data', (chunk: Buffer) => chunks.push(chunk));
++        req.on('end', async () => {
++          try {
++            const remoteAddress = req.socket.remoteAddress || '';
++            const authHeader = (req.headers['x-openclaw-bridge-token'] as string) || '';
++            const loopback = isLoopbackAddress(remoteAddress);
++            const tokenRequired = OPENCLAW_BRIDGE_TOKEN.trim().length > 0;
++
++            if (!loopback && !tokenRequired) {
++              res.writeHead(403);
++              res.end(
++                JSON.stringify({
++                  ok: false,
++                  error:
++                    'openclaw-agent bridge is loopback-only by default. Set OPENCLAW_BRIDGE_TOKEN to allow network clients.',
++                }),
++              );
++              return;
++            }
++
++            if (tokenRequired && authHeader !== OPENCLAW_BRIDGE_TOKEN) {
++              res.writeHead(401);
++              res.end(JSON.stringify({ ok: false, error: 'Invalid bridge token' }));
++              return;
++            }
++
++            const bodyText = Buffer.concat(chunks).toString('utf-8');
++            const body = (tryParseJson(bodyText) || {}) as {
++              agent?: string;
++              message?: string;
++              sessionId?: string;
++            };
++
++            const agent = (body.agent || '').trim().toLowerCase();
++            const message = (body.message || '').trim();
++            const sessionId = (body.sessionId || '').trim();
++
++            if (!agent || !OPENCLAW_ALLOWED_AGENTS.has(agent)) {
++              res.writeHead(400);
++              res.end(
++                JSON.stringify({
++                  ok: false,
++                  error: `Invalid agent. Allowed: ${Array.from(OPENCLAW_ALLOWED_AGENTS).join(', ')}`,
++                }),
++              );
++              return;
++            }
++
++            if (!message) {
++              res.writeHead(400);
++              res.end(JSON.stringify({ ok: false, error: 'Missing message' }));
++              return;
++            }
++
++            const sid = sessionId || `openroom-${agent}-${Date.now()}`;
++            const args = [
++              'agent',
++              '--agent',
++              agent,
++              '--session-id',
++              sid,
++              '--message',
++              message,
++              '--json',
++            ];
++
++            const cmdResult = await execFileAsync(OPENCLAW_CMD, args, {
++              cwd: OPENCLAW_DEFAULT_WORKDIR,
++              timeout: 300000,
++              maxBuffer: 10 * 1024 * 1024,
++              env: process.env,
++            });
++
++            const stdout = (cmdResult.stdout || '').toString();
++            const parsed = tryParseJson(stdout);
++            if (!parsed) {
++              res.writeHead(502);
++              res.end(
++                JSON.stringify({
++                  ok: false,
++                  error: 'OpenClaw output is not valid JSON',
++                  raw: stdout.slice(0, 2000),
++                }),
++              );
++              return;
++            }
++
++            const text = extractPayloadText(parsed);
++            const parsedObj =
++              typeof parsed === 'object' && parsed !== null
++                ? (parsed as { runId?: string; status?: string; summary?: string })
++                : {};
++            res.writeHead(200);
++            res.end(
++              JSON.stringify({
++                ok: true,
++                agent,
++                sessionId: sid,
++                text,
++                runId: parsedObj.runId || null,
++                status: parsedObj.status || null,
++                summary: parsedObj.summary || null,
++              }),
++            );
++          } catch (err) {
++            const e = err as {
++              stdout?: string;
++              stderr?: string;
++              message?: string;
++              code?: number;
++            };
++            res.writeHead(500);
++            res.end(
++              JSON.stringify({
++                ok: false,
++                error: e?.stderr || e?.message || 'openclaw-agent invocation failed',
++                code: e?.code ?? null,
++                stdout: (e?.stdout || '').slice(0, 1200),
++              }),
++            );
++          }
++        });
++      });
++    },
++  };
++}
++
+ /** Generic JSON file persistence plugin factory */
+ function jsonFilePlugin(name: string, apiPath: string, filePath: string): Plugin {
+   return {
+@@ -396,6 +572,7 @@ const config = ({ mode }: ConfigEnv): UserConfigExport => {
+     sessionDataPlugin(),
+     logServerPlugin(),
+     llmProxyPlugin(),
++    openClawAgentBridgePlugin(),
+     jsonFilePlugin('characters', '/api/characters', CHARACTERS_FILE),
+     jsonFilePlugin('mods', '/api/mods', MODS_FILE),
+     appGeneratorPlugin({
