@@ -7,6 +7,10 @@ OpenClaw bridge plugins for connecting OpenClaw agent workflows with OpenRoom.
 - `plugins/openclaw-openroom-bridge`
   - Bridge OpenClaw tools to local OpenRoom APIs (`/api/llm-config`, `/api/session-data`, `/api/characters`, `/api/mods`, `/api/llm-proxy`)
   - Includes health check + optional dev server lifecycle helpers.
+- `integrations/openroom-agentic-suite`
+  - PR-1 MCP client minimal (`/api/mcp-servers`, `/api/mcp-tools`, `/api/mcp-call`)
+  - PR-2 5 MainAgent router session pager/switch UX
+  - PR-3 mailbox bridge (`/api/openclaw-mailbox`) + basic tests
 
 ## Quick Install (OpenClaw)
 
