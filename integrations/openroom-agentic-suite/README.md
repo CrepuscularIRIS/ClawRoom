@@ -57,6 +57,34 @@ This script:
 - runs `pnpm --dir apps/webuiapps test`
 - runs `pnpm --dir apps/webuiapps build`
 
+## Bundle Files (V3 Sync)
+
+This bundle now ships the complete OpenRoom-side integration set (not only backend bridge):
+
+- `apps/webuiapps/vite.config.ts`
+- `apps/webuiapps/src/components/ChatPanel/index.tsx`
+- `apps/webuiapps/src/components/ChatPanel/index.module.scss`
+- `apps/webuiapps/src/components/Shell/index.tsx`
+- `apps/webuiapps/src/lib/openclawAgentTools.ts`
+- `apps/webuiapps/src/lib/openclawMailboxTools.ts`
+- `apps/webuiapps/src/lib/mcpBridgeTools.ts`
+- `apps/webuiapps/src/lib/__tests__/mcpBridgeTools.test.ts`
+- `apps/webuiapps/src/lib/__tests__/openclawMailboxTools.test.ts`
+
+## Optional Runtime Smoke
+
+With OpenRoom dev server running, run:
+
+```bash
+bash integrations/openroom-agentic-suite/smoke_openclaw_bridge.sh
+```
+
+It probes:
+
+- `POST /api/openclaw-agent`
+- `GET /api/openclaw-mailbox?action=poll`
+- `GET /api/mcp-tools`
+
 ## Notes
 
 - This bundle assumes your OpenRoom already includes the 5-agent router baseline.
