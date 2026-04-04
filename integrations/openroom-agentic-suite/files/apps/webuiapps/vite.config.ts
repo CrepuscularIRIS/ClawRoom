@@ -435,7 +435,7 @@ function readMcpFrames(onMessage: (message: Record<string, unknown>) => void) {
       const headerEnd = buffer.indexOf('\r\n\r\n');
       if (headerEnd < 0) return;
       const headerRaw = buffer.slice(0, headerEnd).toString('utf-8');
-      const match = headerRaw.match(/content-length\\s*:\\s*(\\d+)/i);
+      const match = headerRaw.match(/content-length\s*:\s*(\d+)/i);
       if (!match) {
         buffer = Buffer.alloc(0);
         return;
