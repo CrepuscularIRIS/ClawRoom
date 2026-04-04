@@ -100,8 +100,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
-  min-width: max-content;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .routerMeta {
@@ -136,8 +136,8 @@
 }
 
 .routerAgentSelect {
-  min-width: 92px;
-  max-width: 170px;
+  min-width: 88px;
+  max-width: 120px;
   background: #282a2a;
   border: 1px solid rgba(255, 255, 255, 0.14);
   color: rgba(255, 255, 255, 0.86);
@@ -153,6 +153,39 @@
     outline: none;
     border-color: rgba(250, 234, 95, 0.5);
   }
+}
+
+.routerAgentTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.14);
+  flex-wrap: wrap;
+}
+
+.routerAgentTab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover {
+    border-color: rgba(255, 255, 255, 0.22);
+    color: rgba(255, 255, 255, 0.9);
+  }
+}
+
+.routerAgentTabActive {
+  border-color: rgba(250, 234, 95, 0.62);
+  color: #faea5f;
+  background: rgba(250, 234, 95, 0.12);
 }
 
 .routerPager {
@@ -658,6 +691,10 @@
   }
 
   .stageText {
+    display: none;
+  }
+
+  .routerMeta {
     display: none;
   }
 }

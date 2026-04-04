@@ -145,6 +145,14 @@ const MAIN_AGENT_LABEL: Record<MainAgentId, string> = {
   satonus: 'Satonus (Aoi-Security)',
 };
 
+const MAIN_AGENT_SHORT_LABEL: Record<MainAgentId, string> = {
+  lacia: 'Lacia',
+  methode: 'Methode',
+  kouka: 'Kouka',
+  snowdrop: 'Snowdrop',
+  satonus: 'Satonus',
+};
+
 const ROUTER_PAGE_SIZE = 24;
 const CHAT_UPLOAD_EVENT = 'openroom-chat-upload-files';
 const MAX_UPLOAD_ITEMS = 4;
@@ -1821,18 +1829,22 @@ const ChatPanel: React.FC<{
                 >
                   {openClawRouterEnabled ? 'Router On' : 'Router Off'}
                 </button>
-                <select
-                  className={styles.routerAgentSelect}
-                  value={activeMainAgent}
-                  onChange={(e) => setActiveMainAgent(e.target.value as MainAgentId)}
-                  title="Active OpenClaw main agent"
-                >
+                <div className={styles.routerAgentTabs} role="tablist" aria-label="OpenClaw main agents">
                   {MAIN_AGENTS.map((agent) => (
-                    <option key={agent} value={agent}>
-                      {MAIN_AGENT_LABEL[agent]}
-                    </option>
+                    <button
+                      key={agent}
+                      className={`${styles.routerAgentTab} ${
+                        activeMainAgent === agent ? styles.routerAgentTabActive : ''
+                      }`}
+                      onClick={() => setActiveMainAgent(agent)}
+                      role="tab"
+                      aria-selected={activeMainAgent === agent}
+                      title={MAIN_AGENT_LABEL[agent]}
+                    >
+                      {MAIN_AGENT_SHORT_LABEL[agent]}
+                    </button>
                   ))}
-                </select>
+                </div>
                 <select
                   className={styles.routerAgentSelect}
                   value={routerExecutionMode}
@@ -1869,7 +1881,7 @@ const ChatPanel: React.FC<{
               </div>
               <div className={styles.routerPagerActions}>
                 <span className={styles.routerPagerInfo}>
-                  {activeMainAgent} page {routerCurrentPage}/{routerTotalPages}
+                  {MAIN_AGENT_SHORT_LABEL[activeMainAgent]} page {routerCurrentPage}/{routerTotalPages}
                 </span>
                 <button
                   className={styles.routerPagerBtn}
