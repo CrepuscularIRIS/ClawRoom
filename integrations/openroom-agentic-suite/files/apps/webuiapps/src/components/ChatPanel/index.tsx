@@ -1747,6 +1747,7 @@ const ChatPanel: React.FC<{
   const routerCurrentPage =
     routerPagePref <= 0 ? routerTotalPages : Math.max(1, Math.min(routerTotalPages, routerPagePref));
   const routerPageStart = (routerCurrentPage - 1) * ROUTER_PAGE_SIZE;
+  const hasMultipleRouterPages = routerTotalPages > 1;
   const displayMessages = openClawRouterEnabled
     ? routerMessages.slice(routerPageStart, routerPageStart + ROUTER_PAGE_SIZE)
     : messages;
@@ -1883,42 +1884,48 @@ const ChatPanel: React.FC<{
                 <span className={styles.routerPagerInfo}>
                   {MAIN_AGENT_SHORT_LABEL[activeMainAgent]} page {routerCurrentPage}/{routerTotalPages}
                 </span>
-                <button
-                  className={styles.routerPagerBtn}
-                  onClick={() =>
-                    setOpenClawPages((prev) => ({
-                      ...prev,
-                      [activeMainAgent]: Math.max(1, routerCurrentPage - 1),
-                    }))
-                  }
-                  disabled={routerCurrentPage <= 1}
-                >
-                  Prev
-                </button>
-                <button
-                  className={styles.routerPagerBtn}
-                  onClick={() =>
-                    setOpenClawPages((prev) => ({
-                      ...prev,
-                      [activeMainAgent]: 0,
-                    }))
-                  }
-                  disabled={routerCurrentPage >= routerTotalPages}
-                >
-                  Latest
-                </button>
-                <button
-                  className={styles.routerPagerBtn}
-                  onClick={() =>
-                    setOpenClawPages((prev) => ({
-                      ...prev,
-                      [activeMainAgent]: Math.min(routerTotalPages, routerCurrentPage + 1),
-                    }))
-                  }
-                  disabled={routerCurrentPage >= routerTotalPages}
-                >
-                  Next
-                </button>
+                {hasMultipleRouterPages ? (
+                  <>
+                    <button
+                      className={styles.routerPagerBtn}
+                      onClick={() =>
+                        setOpenClawPages((prev) => ({
+                          ...prev,
+                          [activeMainAgent]: Math.max(1, routerCurrentPage - 1),
+                        }))
+                      }
+                      disabled={routerCurrentPage <= 1}
+                    >
+                      Prev
+                    </button>
+                    <button
+                      className={styles.routerPagerBtn}
+                      onClick={() =>
+                        setOpenClawPages((prev) => ({
+                          ...prev,
+                          [activeMainAgent]: 0,
+                        }))
+                      }
+                      disabled={routerCurrentPage >= routerTotalPages}
+                    >
+                      Latest
+                    </button>
+                    <button
+                      className={styles.routerPagerBtn}
+                      onClick={() =>
+                        setOpenClawPages((prev) => ({
+                          ...prev,
+                          [activeMainAgent]: Math.min(routerTotalPages, routerCurrentPage + 1),
+                        }))
+                      }
+                      disabled={routerCurrentPage >= routerTotalPages}
+                    >
+                      Next
+                    </button>
+                  </>
+                ) : (
+                  <span className={styles.routerPagerHint}>No older pages in this agent lane.</span>
+                )}
               </div>
             </div>
           )}
