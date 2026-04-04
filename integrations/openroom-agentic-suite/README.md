@@ -26,6 +26,16 @@ This integration bundle lands the three staged improvements for OpenRoom ↔ Ope
   - `mcpBridgeTools.test.ts`
   - `openclawMailboxTools.test.ts`
 
+4. **Router Execution Alignment (Direct / Hybrid)**
+- Added router execution mode to ChatPanel:
+  - `direct`: forward the user task to active OpenClaw main agent and return text result
+  - `hybrid`: keep OpenRoom local tool loop active (app/file/memory/mailbox/mcp), and use OpenClaw delegation as a tool inside the same turn
+- New command:
+  - `/oc mode <direct|hybrid>`
+- Why:
+  - `direct` is stable for pure delegation chat
+  - `hybrid` is required when you expect OpenRoom apps to be actively driven in the same conversation
+
 ## Apply
 
 ```bash
@@ -41,3 +51,4 @@ This script:
 
 - This bundle assumes your OpenRoom already includes the 5-agent router baseline.
 - If you are using `openroom-five-mainagent-router` patch from this repo, apply that first.
+- If "Router On" appears to only return plain text and cannot drive apps, switch to `hybrid`.

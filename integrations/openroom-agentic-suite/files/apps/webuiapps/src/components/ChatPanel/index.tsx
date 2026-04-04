@@ -114,6 +114,8 @@ interface CharacterDisplayMessage extends DisplayMessage {
   agent?: MainAgentId;
 }
 
+type RouterExecutionMode = 'direct' | 'hybrid';
+
 function hasUsableLLMConfig(config: LLMConfig | null | undefined): config is LLMConfig {
   return !!config?.baseUrl.trim() && !!config.model.trim();
 }
@@ -473,6 +475,7 @@ const ChatPanel: React.FC<{
 }> = ({ onClose, visible = true, zIndex, onFocus }) => {
   const ROUTER_ENABLED_KEY = 'openroom-openclaw-router-enabled';
   const ROUTER_AGENT_KEY = 'openroom-openclaw-router-agent';
+  const ROUTER_EXEC_MODE_KEY = 'openroom-openclaw-router-exec-mode';
   const ROUTER_SESSIONS_KEY = 'openroom-openclaw-router-sessions';
   const ROUTER_PAGES_KEY = 'openroom-openclaw-router-pages';
 
@@ -532,6 +535,14 @@ const ChatPanel: React.FC<{
       // ignore
     }
     return 'lacia';
+  });
+  const [routerExecutionMode, setRouterExecutionMode] = useState<RouterExecutionMode>(() => {
+    try {
+      const raw = (localStorage.getItem(ROUTER_EXEC_MODE_KEY) || '').trim().toLowerCase();
+      return raw === 'hybrid' ? 'hybrid' : 'direct';
+    } catch {
+      return 'direct';
+    }
   });
   const [openClawSessions, setOpenClawSessions] = useState<Partial<Record<MainAgentId, string>>>(
     () => {
@@ -707,6 +718,14 @@ const ChatPanel: React.FC<{
       // ignore
     }
   }, [activeMainAgent]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ROUTER_EXEC_MODE_KEY, routerExecutionMode);
+    } catch {
+      // ignore
+    }
+  }, [routerExecutionMode]);
 
   useEffect(() => {
     try {
@@ -984,9 +1003,26 @@ const ChatPanel: React.FC<{
         return;
       }
 
+      const cmdMode = text.match(/^\/oc\s+mode\s+(direct|hybrid)\s*$/i);
+      if (cmdMode) {
+        const mode = cmdMode[1].toLowerCase() as RouterExecutionMode;
+        setRouterExecutionMode(mode);
+        const content =
+          mode === 'hybrid'
+            ? 'Router execution mode switched to hybrid (local tool loop + OpenClaw delegation tools).'
+            : 'Router execution mode switched to direct (send task straight to active OpenClaw agent).';
+        addMessage({
+          id: String(Date.now()),
+          role: 'assistant',
+          content,
+        });
+        setChatHistory((prev) => [...prev, { role: 'assistant', content }]);
+        return;
+      }
+
       if (/^\/oc\s+status\s*$/i.test(text)) {
         const sid = openClawSessions[activeMainAgent] || '(none)';
-        const content = `Router=${openClawRouterEnabled ? 'on' : 'off'}, active=${activeMainAgent}, session=${sid}`;
+        const content = `Router=${openClawRouterEnabled ? 'on' : 'off'}, mode=${routerExecutionMode}, active=${activeMainAgent}, session=${sid}`;
         addMessage({
           id: String(Date.now()),
           role: 'assistant',
@@ -1005,13 +1041,14 @@ const ChatPanel: React.FC<{
         return;
       }
 
-      if (openClawRouterEnabled) {
+      if (openClawRouterEnabled && routerExecutionMode === 'direct') {
         await routeToMainAgent(activeMainAgent, text);
         return;
       }
 
       if (!hasUsableLLMConfig(config)) {
         setOpenClawRouterEnabled(true);
+        setRouterExecutionMode('direct');
         addMessage({
           id: String(Date.now()),
           role: 'assistant',
@@ -1050,6 +1087,7 @@ const ChatPanel: React.FC<{
       addMessage,
       activeMainAgent,
       openClawRouterEnabled,
+      routerExecutionMode,
       openClawSessions,
     ],
   );
@@ -1080,6 +1118,19 @@ const ChatPanel: React.FC<{
     const currentMemories = memoriesRef.current;
     const fullMessages: ChatMessage[] = [
       { role: 'system', content: buildSystemPrompt(char, mm, hasImageGen, currentMemories) },
+      ...(openClawRouterEnabled && routerExecutionMode === 'hybrid'
+        ? [
+            {
+              role: 'system' as const,
+              content: [
+                '[OpenClaw Hybrid Router]',
+                `Active main agent: ${activeMainAgent}`,
+                'When delegating to OpenClaw, default to this active agent unless user explicitly picks another.',
+                'In hybrid mode, keep local tool execution available (app/file/memory/mailbox/mcp) and only delegate sub-tasks that need OpenClaw backends.',
+              ].join('\n'),
+            },
+          ]
+        : []),
       ...history,
     ];
 
@@ -1296,8 +1347,21 @@ const ChatPanel: React.FC<{
               typeof delegateParams.agent === 'string'
                 ? delegateParams.agent.trim().toLowerCase()
                 : '';
+            if (!delegatedAgent && openClawRouterEnabled && routerExecutionMode === 'hybrid') {
+              delegateParams.agent = activeMainAgent;
+            }
             if (MAIN_AGENTS.includes(delegatedAgent as MainAgentId) && !delegateParams.session_id) {
               const cachedSession = openClawSessions[delegatedAgent as MainAgentId];
+              if (cachedSession) {
+                delegateParams.session_id = cachedSession;
+              }
+            } else if (
+              !delegatedAgent &&
+              openClawRouterEnabled &&
+              routerExecutionMode === 'hybrid' &&
+              !delegateParams.session_id
+            ) {
+              const cachedSession = openClawSessions[activeMainAgent];
               if (cachedSession) {
                 delegateParams.session_id = cachedSession;
               }
@@ -1499,6 +1563,15 @@ const ChatPanel: React.FC<{
                     </option>
                   ))}
                 </select>
+                <select
+                  className={styles.routerAgentSelect}
+                  value={routerExecutionMode}
+                  onChange={(e) => setRouterExecutionMode(e.target.value as RouterExecutionMode)}
+                  title="Router execution mode"
+                >
+                  <option value="direct">direct</option>
+                  <option value="hybrid">hybrid</option>
+                </select>
                 <span className={styles.routerMeta}>MCP {Object.keys(mcpToolIndex).length}</span>
               </div>
               <div onClick={() => setShowModPanel(true)} style={{ cursor: 'pointer' }}>
@@ -1638,7 +1711,7 @@ const ChatPanel: React.FC<{
               onKeyDown={handleKeyDown}
               placeholder={
                 openClawRouterEnabled
-                  ? `Route to ${activeMainAgent} (commands: /oc use <agent>, /oc off, /oc status)`
+                  ? `Router ${routerExecutionMode} -> ${activeMainAgent} (commands: /oc use <agent>, /oc mode <direct|hybrid>, /oc off, /oc status)`
                   : 'Type a message...'
               }
               rows={1}
