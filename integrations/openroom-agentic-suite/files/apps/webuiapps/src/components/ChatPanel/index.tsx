@@ -9,7 +9,6 @@ import {
   ChevronRight,
   Pencil,
   List,
-  Paperclip,
   X,
 } from 'lucide-react';
 import { chat, loadConfig, loadConfigSync, saveConfig, type ChatMessage } from '@/lib/llmClient';
@@ -147,6 +146,7 @@ const MAIN_AGENT_LABEL: Record<MainAgentId, string> = {
 };
 
 const ROUTER_PAGE_SIZE = 24;
+const CHAT_UPLOAD_EVENT = 'openroom-chat-upload-files';
 const MAX_UPLOAD_ITEMS = 4;
 const MAX_UPLOAD_FILE_SIZE = 2 * 1024 * 1024;
 const MAX_UPLOAD_TEXT_CHARS = 12000;
@@ -668,7 +668,6 @@ const ChatPanel: React.FC<{
     }
   });
   const [uploadItems, setUploadItems] = useState<UploadedContextItem[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Suggested replies from latest assistant message
   const [suggestedReplies, setSuggestedReplies] = useState<string[]>([]);
@@ -1013,8 +1012,8 @@ const ChatPanel: React.FC<{
     return unsubscribe;
   }, [processActionQueue]);
 
-  const handleUploadFiles = useCallback(async (files: FileList | null) => {
-    const picked = Array.from(files || []).slice(0, MAX_UPLOAD_ITEMS);
+  const handleUploadFiles = useCallback(async (files: File[]) => {
+    const picked = files.slice(0, MAX_UPLOAD_ITEMS);
     if (picked.length === 0) return;
 
     const built: UploadedContextItem[] = [];
@@ -1098,6 +1097,17 @@ const ChatPanel: React.FC<{
 
     setUploadItems((prev) => [...prev, ...built].slice(0, MAX_UPLOAD_ITEMS));
   }, []);
+
+  useEffect(() => {
+    const onUpload = (event: Event) => {
+      const detail = (event as CustomEvent<{ files?: File[] }>).detail;
+      const files = Array.isArray(detail?.files) ? detail.files : [];
+      if (files.length === 0) return;
+      handleUploadFiles(files);
+    };
+    window.addEventListener(CHAT_UPLOAD_EVENT, onUpload as EventListener);
+    return () => window.removeEventListener(CHAT_UPLOAD_EVENT, onUpload as EventListener);
+  }, [handleUploadFiles]);
 
   const removeUploadItem = useCallback((id: string) => {
     setUploadItems((prev) => prev.filter((item) => item.id !== id));
@@ -1333,6 +1343,7 @@ const ChatPanel: React.FC<{
     ];
 
     const currentMemories = memoriesRef.current;
+    const laneAgent = openClawRouterEnabled ? activeMainAgent : undefined;
     const fullMessages: ChatMessage[] = [
       { role: 'system', content: buildSystemPrompt(char, mm, hasImageGen, currentMemories) },
       ...(openClawRouterEnabled && routerExecutionMode === 'hybrid'
@@ -1367,6 +1378,7 @@ const ChatPanel: React.FC<{
             id: String(Date.now()),
             role: 'assistant',
             content: response.content,
+            agent: laneAgent,
             toolCalls:
               pendingToolCallsRef.current.length > 0 ? [...pendingToolCallsRef.current] : undefined,
           });
@@ -1407,6 +1419,7 @@ const ChatPanel: React.FC<{
             id: String(Date.now()),
             role: 'assistant',
             content,
+            agent: laneAgent,
             emotion,
             suggestedReplies: replies,
             toolCalls:
@@ -1508,6 +1521,7 @@ const ChatPanel: React.FC<{
                 id: String(Date.now()) + '-img',
                 role: 'assistant',
                 content: '',
+                agent: laneAgent,
                 imageUrl: dataUrl,
               });
             }
@@ -1754,12 +1768,51 @@ const ChatPanel: React.FC<{
             <div
               className={styles.headerLeft}
               onClick={() => setShowCharacterPanel(true)}
+              title="Open Aoi profiles (create/switch)"
               style={{ cursor: 'pointer' }}
             >
               <span className={styles.characterName}>{character.character_name}</span>
               <ChevronRight size={14} style={{ color: 'rgba(255,255,255,0.4)' }} />
             </div>
             <div className={styles.headerActions}>
+              <div onClick={() => setShowModPanel(true)} style={{ cursor: 'pointer' }}>
+                <StageIndicator modManager={modManager} />
+              </div>
+              <button
+                className={styles.iconBtn}
+                onClick={handleResetSession}
+                title="Reset session"
+                data-testid="reset-session"
+              >
+                <RotateCcw size={16} />
+              </button>
+              <button
+                className={styles.iconBtn}
+                onClick={handleClearHistory}
+                title="Clear chat"
+                data-testid="clear-chat"
+              >
+                <Trash2 size={16} />
+              </button>
+              <button
+                className={styles.iconBtn}
+                onClick={() => setShowSettings(true)}
+                title="Router / LLM Settings"
+                data-testid="settings-btn"
+              >
+                <Settings size={16} />
+              </button>
+              <button className={styles.iconBtn} onClick={onClose} title="Minimize">
+                <Minus size={16} />
+              </button>
+              <button className={styles.iconBtn} title="Maximize">
+                <Maximize2 size={16} />
+              </button>
+            </div>
+          </div>
+
+          {openClawRouterEnabled && (
+            <div className={styles.routerPager}>
               <div className={styles.routerControls}>
                 <button
                   className={`${styles.routerToggle} ${openClawRouterEnabled ? styles.routerToggleOn : ''}`}
@@ -1805,7 +1858,7 @@ const ChatPanel: React.FC<{
                 <button
                   className={`${styles.routerToggle} ${actionReportingEnabled ? styles.routerToggleOn : ''}`}
                   onClick={() => setActionReportingEnabled((prev) => !prev)}
-                  title="Toggle action reporting panel"
+                  title="Toggle Actions taken panel"
                 >
                   Actions
                 </button>
@@ -1814,48 +1867,10 @@ const ChatPanel: React.FC<{
                   SID {(openClawSessions[activeMainAgent] || 'none').slice(0, 8)}
                 </span>
               </div>
-              <div onClick={() => setShowModPanel(true)} style={{ cursor: 'pointer' }}>
-                <StageIndicator modManager={modManager} />
-              </div>
-              <button
-                className={styles.iconBtn}
-                onClick={handleResetSession}
-                title="Reset session"
-                data-testid="reset-session"
-              >
-                <RotateCcw size={16} />
-              </button>
-              <button
-                className={styles.iconBtn}
-                onClick={handleClearHistory}
-                title="Clear chat"
-                data-testid="clear-chat"
-              >
-                <Trash2 size={16} />
-              </button>
-              <button
-                className={styles.iconBtn}
-                onClick={() => setShowSettings(true)}
-                title="Settings"
-                data-testid="settings-btn"
-              >
-                <Settings size={16} />
-              </button>
-              <button className={styles.iconBtn} onClick={onClose} title="Minimize">
-                <Minus size={16} />
-              </button>
-              <button className={styles.iconBtn} title="Maximize">
-                <Maximize2 size={16} />
-              </button>
-            </div>
-          </div>
-
-          {openClawRouterEnabled && (
-            <div className={styles.routerPager}>
-              <span className={styles.routerPagerInfo}>
-                {activeMainAgent} page {routerCurrentPage}/{routerTotalPages}
-              </span>
               <div className={styles.routerPagerActions}>
+                <span className={styles.routerPagerInfo}>
+                  {activeMainAgent} page {routerCurrentPage}/{routerTotalPages}
+                </span>
                 <button
                   className={styles.routerPagerBtn}
                   onClick={() =>
@@ -1972,32 +1987,13 @@ const ChatPanel: React.FC<{
                 onKeyDown={handleKeyDown}
                 placeholder={
                   openClawRouterEnabled
-                    ? `Router ${routerExecutionMode} -> ${activeMainAgent} (prefer UI controls; /oc commands optional)`
+                    ? `Talk with ${MAIN_AGENT_LABEL[activeMainAgent]} (${routerExecutionMode})`
                     : 'Type a message...'
                 }
                 rows={1}
                 disabled={loading}
                 data-testid="chat-input"
               />
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className={styles.hiddenFileInput}
-                onChange={(e) => {
-                  handleUploadFiles(e.target.files);
-                  e.currentTarget.value = '';
-                }}
-              />
-              <button
-                className={styles.uploadBtn}
-                onClick={() => fileInputRef.current?.click()}
-                disabled={loading}
-                title="Upload files as prompt context"
-              >
-                <Paperclip size={14} />
-                Upload
-              </button>
               <button
                 className={styles.sendBtn}
                 onClick={() => handleSend()}
@@ -2015,12 +2011,22 @@ const ChatPanel: React.FC<{
         <SettingsModal
           config={config}
           imageGenConfig={imageGenConfig}
+          routerEnabled={openClawRouterEnabled}
+          activeMainAgent={activeMainAgent}
+          routerExecutionMode={routerExecutionMode}
+          actionReportingEnabled={actionReportingEnabled}
           onSave={(c, igc) => {
             setConfig(c);
             setImageGenConfig(igc);
             saveConfig(c, igc);
             if (igc) saveImageGenConfig(igc);
             setShowSettings(false);
+          }}
+          onRouterSave={(next) => {
+            setOpenClawRouterEnabled(next.routerEnabled);
+            setActiveMainAgent(next.activeMainAgent);
+            setRouterExecutionMode(next.routerExecutionMode);
+            setActionReportingEnabled(next.actionReportingEnabled);
           }}
           onClose={() => setShowSettings(false)}
         />
@@ -2067,9 +2073,43 @@ const ChatPanel: React.FC<{
 const SettingsModal: React.FC<{
   config: LLMConfig | null;
   imageGenConfig: ImageGenConfig | null;
+  routerEnabled: boolean;
+  activeMainAgent: MainAgentId;
+  routerExecutionMode: RouterExecutionMode;
+  actionReportingEnabled: boolean;
   onSave: (_config: LLMConfig, _igConfig: ImageGenConfig | null) => void;
+  onRouterSave: (_state: {
+    routerEnabled: boolean;
+    activeMainAgent: MainAgentId;
+    routerExecutionMode: RouterExecutionMode;
+    actionReportingEnabled: boolean;
+  }) => void;
   onClose: () => void;
-}> = ({ config, imageGenConfig, onSave, onClose }) => {
+}> = ({
+  config,
+  imageGenConfig,
+  routerEnabled,
+  activeMainAgent,
+  routerExecutionMode,
+  actionReportingEnabled,
+  onSave,
+  onRouterSave,
+  onClose,
+}) => {
+  const [routerEnabledLocal, setRouterEnabledLocal] = useState(routerEnabled);
+  const [activeMainAgentLocal, setActiveMainAgentLocal] = useState<MainAgentId>(activeMainAgent);
+  const [routerExecutionModeLocal, setRouterExecutionModeLocal] =
+    useState<RouterExecutionMode>(routerExecutionMode);
+  const [actionReportingEnabledLocal, setActionReportingEnabledLocal] =
+    useState(actionReportingEnabled);
+  const [bridgeToken, setBridgeToken] = useState(() => {
+    try {
+      return localStorage.getItem('openroom-openclaw-bridge-token') || '';
+    } catch {
+      return '';
+    }
+  });
+
   // LLM settings
   const [provider, setProvider] = useState<LLMProvider>(config?.provider || 'minimax');
   const [apiKey, setApiKey] = useState(config?.apiKey || '');
@@ -2119,7 +2159,72 @@ const SettingsModal: React.FC<{
   return (
     <div className={styles.overlay} data-testid="settings-overlay">
       <div className={styles.settingsModal} data-testid="settings-modal">
-        <div className={styles.settingsTitle}>LLM Settings</div>
+        <div className={styles.settingsTitle}>OpenClaw Router</div>
+
+        <div className={styles.field}>
+          <label className={styles.label}>Router Enabled</label>
+          <select
+            className={styles.select}
+            value={routerEnabledLocal ? 'on' : 'off'}
+            onChange={(e) => setRouterEnabledLocal(e.target.value === 'on')}
+          >
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.label}>Active Main Agent</label>
+          <select
+            className={styles.select}
+            value={activeMainAgentLocal}
+            onChange={(e) => setActiveMainAgentLocal(e.target.value as MainAgentId)}
+          >
+            {MAIN_AGENTS.map((agent) => (
+              <option key={agent} value={agent}>
+                {MAIN_AGENT_LABEL[agent]}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.label}>Execution Mode</label>
+          <select
+            className={styles.select}
+            value={routerExecutionModeLocal}
+            onChange={(e) => setRouterExecutionModeLocal(e.target.value as RouterExecutionMode)}
+          >
+            <option value="direct">direct</option>
+            <option value="hybrid">hybrid</option>
+          </select>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.label}>Actions Reporting Panel</label>
+          <select
+            className={styles.select}
+            value={actionReportingEnabledLocal ? 'on' : 'off'}
+            onChange={(e) => setActionReportingEnabledLocal(e.target.value === 'on')}
+          >
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.label}>Bridge Token (optional)</label>
+          <input
+            className={styles.fieldInput}
+            type="password"
+            value={bridgeToken}
+            onChange={(e) => setBridgeToken(e.target.value)}
+            placeholder="x-openclaw-bridge-token"
+          />
+        </div>
+
+        <div className={styles.settingsDivider} />
+        <div className={styles.settingsTitle}>Local LLM (Optional)</div>
 
         <div className={styles.field}>
           <label className={styles.label}>Provider</label>
@@ -2282,6 +2387,18 @@ const SettingsModal: React.FC<{
           <button
             className={styles.saveBtn}
             onClick={() => {
+              onRouterSave({
+                routerEnabled: routerEnabledLocal,
+                activeMainAgent: activeMainAgentLocal,
+                routerExecutionMode: routerExecutionModeLocal,
+                actionReportingEnabled: actionReportingEnabledLocal,
+              });
+              try {
+                localStorage.setItem('openroom-openclaw-bridge-token', bridgeToken.trim());
+              } catch {
+                // ignore
+              }
+
               const llmCfg: LLMConfig = {
                 provider,
                 apiKey,
