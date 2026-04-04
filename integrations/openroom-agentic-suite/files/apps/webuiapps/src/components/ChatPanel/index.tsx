@@ -9,6 +9,8 @@ import {
   ChevronRight,
   Pencil,
   List,
+  Paperclip,
+  X,
 } from 'lucide-react';
 import { chat, loadConfig, loadConfigSync, saveConfig, type ChatMessage } from '@/lib/llmClient';
 import {
@@ -116,6 +118,14 @@ interface CharacterDisplayMessage extends DisplayMessage {
 
 type RouterExecutionMode = 'direct' | 'hybrid';
 
+interface UploadedContextItem {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  context: string;
+}
+
 function hasUsableLLMConfig(config: LLMConfig | null | undefined): config is LLMConfig {
   return !!config?.baseUrl.trim() && !!config.model.trim();
 }
@@ -137,6 +147,83 @@ const MAIN_AGENT_LABEL: Record<MainAgentId, string> = {
 };
 
 const ROUTER_PAGE_SIZE = 24;
+const MAX_UPLOAD_ITEMS = 4;
+const MAX_UPLOAD_FILE_SIZE = 2 * 1024 * 1024;
+const MAX_UPLOAD_TEXT_CHARS = 12000;
+const MAX_UPLOAD_IMAGE_BYTES = 350 * 1024;
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isLikelyTextFile(file: File): boolean {
+  const type = (file.type || '').toLowerCase();
+  if (type.startsWith('text/')) return true;
+  if (
+    type.includes('json') ||
+    type.includes('xml') ||
+    type.includes('yaml') ||
+    type.includes('csv')
+  ) {
+    return true;
+  }
+  const lower = file.name.toLowerCase();
+  return [
+    '.txt',
+    '.md',
+    '.json',
+    '.yaml',
+    '.yml',
+    '.csv',
+    '.ts',
+    '.tsx',
+    '.js',
+    '.jsx',
+    '.py',
+    '.go',
+    '.java',
+    '.rs',
+    '.c',
+    '.cpp',
+    '.h',
+    '.html',
+    '.css',
+    '.sql',
+  ].some((ext) => lower.endsWith(ext));
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('read text failed'));
+    reader.readAsText(file);
+  });
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('read data url failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function buildUploadBundleText(items: UploadedContextItem[]): string {
+  if (items.length === 0) return '';
+  const blocks = items.map((item, i) =>
+    [
+      `[File ${i + 1}] ${item.name}`,
+      `type: ${item.type || 'application/octet-stream'}`,
+      `size: ${formatBytes(item.size)}`,
+      item.context,
+    ].join('\n'),
+  );
+  return ['[Uploaded Files Context]', ...blocks].join('\n\n');
+}
 
 function compactText(input: string, maxChars = 1600): string {
   const normalized = (input || '').replace(/\s+/g, ' ').trim();
@@ -478,6 +565,7 @@ const ChatPanel: React.FC<{
   const ROUTER_EXEC_MODE_KEY = 'openroom-openclaw-router-exec-mode';
   const ROUTER_SESSIONS_KEY = 'openroom-openclaw-router-sessions';
   const ROUTER_PAGES_KEY = 'openroom-openclaw-router-pages';
+  const ACTION_REPORTING_KEY = 'openroom-action-reporting-enabled';
 
   // Character + Mod state (collection-based)
   const [charCollection, setCharCollection] = useState<CharacterCollection>(
@@ -539,10 +627,11 @@ const ChatPanel: React.FC<{
   const [routerExecutionMode, setRouterExecutionMode] = useState<RouterExecutionMode>(() => {
     try {
       const raw = (localStorage.getItem(ROUTER_EXEC_MODE_KEY) || '').trim().toLowerCase();
-      return raw === 'hybrid' ? 'hybrid' : 'direct';
+      if (raw === 'direct' || raw === 'hybrid') return raw;
     } catch {
-      return 'direct';
+      // ignore
     }
+    return 'hybrid';
   });
   const [openClawSessions, setOpenClawSessions] = useState<Partial<Record<MainAgentId, string>>>(
     () => {
@@ -569,6 +658,17 @@ const ChatPanel: React.FC<{
     },
   );
   const [mcpToolIndex, setMcpToolIndex] = useState<Record<string, McpBridgeTool>>({});
+  const [actionReportingEnabled, setActionReportingEnabled] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(ACTION_REPORTING_KEY);
+      if (raw === null) return true;
+      return raw === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [uploadItems, setUploadItems] = useState<UploadedContextItem[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Suggested replies from latest assistant message
   const [suggestedReplies, setSuggestedReplies] = useState<string[]>([]);
@@ -726,6 +826,14 @@ const ChatPanel: React.FC<{
       // ignore
     }
   }, [routerExecutionMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTION_REPORTING_KEY, actionReportingEnabled ? 'true' : 'false');
+    } catch {
+      // ignore
+    }
+  }, [actionReportingEnabled]);
 
   useEffect(() => {
     try {
@@ -905,19 +1013,126 @@ const ChatPanel: React.FC<{
     return unsubscribe;
   }, [processActionQueue]);
 
+  const handleUploadFiles = useCallback(async (files: FileList | null) => {
+    const picked = Array.from(files || []).slice(0, MAX_UPLOAD_ITEMS);
+    if (picked.length === 0) return;
+
+    const built: UploadedContextItem[] = [];
+    for (const file of picked) {
+      const baseInfo = [
+        `filename: ${file.name}`,
+        `mime: ${file.type || 'application/octet-stream'}`,
+        `size: ${formatBytes(file.size)}`,
+      ];
+
+      if (file.size > MAX_UPLOAD_FILE_SIZE) {
+        built.push({
+          id: `${Date.now()}-${file.name}-${file.size}`,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          context: [...baseInfo, 'note: file too large, only metadata attached'].join('\n'),
+        });
+        continue;
+      }
+
+      try {
+        if ((file.type || '').startsWith('image/')) {
+          if (file.size <= MAX_UPLOAD_IMAGE_BYTES) {
+            const dataUrl = await readFileAsDataUrl(file);
+            built.push({
+              id: `${Date.now()}-${file.name}-${file.size}`,
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              context: [...baseInfo, `image_data_url: ${dataUrl}`].join('\n'),
+            });
+          } else {
+            built.push({
+              id: `${Date.now()}-${file.name}-${file.size}`,
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              context: [...baseInfo, 'note: image too large, metadata attached only'].join('\n'),
+            });
+          }
+          continue;
+        }
+
+        if (isLikelyTextFile(file)) {
+          const text = await readFileAsText(file);
+          const normalized = text.replace(/\0/g, '').trim();
+          const clipped =
+            normalized.length > MAX_UPLOAD_TEXT_CHARS
+              ? `${normalized.slice(0, MAX_UPLOAD_TEXT_CHARS)}\n...[truncated]`
+              : normalized;
+          built.push({
+            id: `${Date.now()}-${file.name}-${file.size}`,
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            context: [...baseInfo, 'content:', '```text', clipped || '(empty file)', '```'].join(
+              '\n',
+            ),
+          });
+          continue;
+        }
+
+        built.push({
+          id: `${Date.now()}-${file.name}-${file.size}`,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          context: [...baseInfo, 'note: binary file, metadata attached only'].join('\n'),
+        });
+      } catch (err) {
+        built.push({
+          id: `${Date.now()}-${file.name}-${file.size}`,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          context: [...baseInfo, `note: upload parse failed (${String(err)})`].join('\n'),
+        });
+      }
+    }
+
+    setUploadItems((prev) => [...prev, ...built].slice(0, MAX_UPLOAD_ITEMS));
+  }, []);
+
+  const removeUploadItem = useCallback((id: string) => {
+    setUploadItems((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
+  const clearUploadItems = useCallback(() => {
+    setUploadItems([]);
+  }, []);
+
   // Send message
   const handleSend = useCallback(
     async (overrideText?: string) => {
-      const text = overrideText ?? input.trim();
-      if (!text || loading) return;
+      const typedText = overrideText ?? input.trim();
+      const rawText =
+        typedText || (uploadItems.length > 0 ? 'Please analyze the uploaded files and continue.' : '');
+      if (!rawText || loading) return;
 
       if (!overrideText) setInput('');
       setSuggestedReplies([]);
 
+      const uploadSnapshot = uploadItems;
+      const uploadContext = buildUploadBundleText(uploadSnapshot);
+      const isOcCommand = /^\/oc\b/i.test(rawText);
+      const text = !isOcCommand && uploadContext ? `${rawText}\n\n${uploadContext}` : rawText;
+      if (uploadSnapshot.length > 0 && !isOcCommand) {
+        clearUploadItems();
+      }
+
       const userDisplay: CharacterDisplayMessage = {
         id: String(Date.now()),
         role: 'user',
-        content: text,
+        content:
+          !isOcCommand && uploadSnapshot.length > 0
+            ? `${rawText}\n\n[Attached files: ${uploadSnapshot.map((item) => item.name).join(', ')}]`
+            : rawText,
         agent: openClawRouterEnabled ? activeMainAgent : undefined,
       };
       addMessage(userDisplay);
@@ -972,7 +1187,7 @@ const ChatPanel: React.FC<{
         }
       };
 
-      const cmdUse = text.match(/^\/oc\s+use\s+(lacia|methode|kouka|snowdrop|satonus)\s*$/i);
+      const cmdUse = rawText.match(/^\/oc\s+use\s+(lacia|methode|kouka|snowdrop|satonus)\s*$/i);
       if (cmdUse) {
         const agent = cmdUse[1].toLowerCase() as MainAgentId;
         setOpenClawRouterEnabled(true);
@@ -989,7 +1204,7 @@ const ChatPanel: React.FC<{
         return;
       }
 
-      if (/^\/oc\s+off\s*$/i.test(text)) {
+      if (/^\/oc\s+off\s*$/i.test(rawText)) {
         setOpenClawRouterEnabled(false);
         addMessage({
           id: String(Date.now()),
@@ -1003,7 +1218,7 @@ const ChatPanel: React.FC<{
         return;
       }
 
-      const cmdMode = text.match(/^\/oc\s+mode\s+(direct|hybrid)\s*$/i);
+      const cmdMode = rawText.match(/^\/oc\s+mode\s+(direct|hybrid)\s*$/i);
       if (cmdMode) {
         const mode = cmdMode[1].toLowerCase() as RouterExecutionMode;
         setRouterExecutionMode(mode);
@@ -1020,7 +1235,7 @@ const ChatPanel: React.FC<{
         return;
       }
 
-      if (/^\/oc\s+status\s*$/i.test(text)) {
+      if (/^\/oc\s+status\s*$/i.test(rawText)) {
         const sid = openClawSessions[activeMainAgent] || '(none)';
         const content = `Router=${openClawRouterEnabled ? 'on' : 'off'}, mode=${routerExecutionMode}, active=${activeMainAgent}, session=${sid}`;
         addMessage({
@@ -1032,7 +1247,7 @@ const ChatPanel: React.FC<{
         return;
       }
 
-      const directOpenClawMatch = text.match(
+      const directOpenClawMatch = rawText.match(
         /^\/oc\s+(lacia|methode|kouka|snowdrop|satonus)\s+([\s\S]+)$/i,
       );
       if (directOpenClawMatch) {
@@ -1089,6 +1304,8 @@ const ChatPanel: React.FC<{
       openClawRouterEnabled,
       routerExecutionMode,
       openClawSessions,
+      uploadItems,
+      clearUploadItems,
     ],
   );
 
@@ -1572,7 +1789,30 @@ const ChatPanel: React.FC<{
                   <option value="direct">direct</option>
                   <option value="hybrid">hybrid</option>
                 </select>
+                <button
+                  className={styles.routerToggle}
+                  onClick={() =>
+                    setOpenClawSessions((prev) => {
+                      const next = { ...prev };
+                      delete next[activeMainAgent];
+                      return next;
+                    })
+                  }
+                  title="Start a new backend session for current agent"
+                >
+                  New Session
+                </button>
+                <button
+                  className={`${styles.routerToggle} ${actionReportingEnabled ? styles.routerToggleOn : ''}`}
+                  onClick={() => setActionReportingEnabled((prev) => !prev)}
+                  title="Toggle action reporting panel"
+                >
+                  Actions
+                </button>
                 <span className={styles.routerMeta}>MCP {Object.keys(mcpToolIndex).length}</span>
+                <span className={styles.routerMeta}>
+                  SID {(openClawSessions[activeMainAgent] || 'none').slice(0, 8)}
+                </span>
               </div>
               <div onClick={() => setShowModPanel(true)} style={{ cursor: 'pointer' }}>
                 <StageIndicator modManager={modManager} />
@@ -1683,7 +1923,7 @@ const ChatPanel: React.FC<{
                     <img src={msg.imageUrl} alt="Generated" className={styles.messageImage} />
                   )}
                 </div>
-                {msg.toolCalls && msg.toolCalls.length > 0 && (
+                {actionReportingEnabled && msg.toolCalls && msg.toolCalls.length > 0 && (
                   <ActionsTaken calls={msg.toolCalls} />
                 )}
               </React.Fragment>
@@ -1704,28 +1944,69 @@ const ChatPanel: React.FC<{
           )}
 
           <div className={styles.inputArea}>
-            <textarea
-              className={styles.input}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={
-                openClawRouterEnabled
-                  ? `Router ${routerExecutionMode} -> ${activeMainAgent} (commands: /oc use <agent>, /oc mode <direct|hybrid>, /oc off, /oc status)`
-                  : 'Type a message...'
-              }
-              rows={1}
-              disabled={loading}
-              data-testid="chat-input"
-            />
-            <button
-              className={styles.sendBtn}
-              onClick={() => handleSend()}
-              disabled={loading || !input.trim()}
-              data-testid="send-btn"
-            >
-              Send
-            </button>
+            {uploadItems.length > 0 && (
+              <div className={styles.uploadQueue}>
+                {uploadItems.map((item) => (
+                  <span key={item.id} className={styles.uploadChip}>
+                    {item.name}
+                    <button
+                      className={styles.uploadChipRemove}
+                      onClick={() => removeUploadItem(item.id)}
+                      title="Remove file"
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+                <button className={styles.uploadClearBtn} onClick={clearUploadItems}>
+                  Clear
+                </button>
+              </div>
+            )}
+
+            <div className={styles.inputRow}>
+              <textarea
+                className={styles.input}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={
+                  openClawRouterEnabled
+                    ? `Router ${routerExecutionMode} -> ${activeMainAgent} (prefer UI controls; /oc commands optional)`
+                    : 'Type a message...'
+                }
+                rows={1}
+                disabled={loading}
+                data-testid="chat-input"
+              />
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className={styles.hiddenFileInput}
+                onChange={(e) => {
+                  handleUploadFiles(e.target.files);
+                  e.currentTarget.value = '';
+                }}
+              />
+              <button
+                className={styles.uploadBtn}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={loading}
+                title="Upload files as prompt context"
+              >
+                <Paperclip size={14} />
+                Upload
+              </button>
+              <button
+                className={styles.sendBtn}
+                onClick={() => handleSend()}
+                disabled={loading || (!input.trim() && uploadItems.length === 0)}
+                data-testid="send-btn"
+              >
+                Send
+              </button>
+            </div>
           </div>
         </div>
       </div>

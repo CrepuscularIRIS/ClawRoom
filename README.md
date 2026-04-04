@@ -12,6 +12,7 @@ OpenClaw bridge plugins for connecting OpenClaw agent workflows with OpenRoom.
   - PR-2 5 MainAgent router session pager/switch UX
   - PR-3 mailbox bridge (`/api/openclaw-mailbox`) + basic tests
   - Router alignment mode (`direct` / `hybrid`) for "delegate-only" vs "delegate + local app tools"
+  - UI-first controls: `New Session`, `Actions`, `Upload` context injection
 
 ## Quick Install (OpenClaw)
 

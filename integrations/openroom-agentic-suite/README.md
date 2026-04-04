@@ -36,6 +36,16 @@ This integration bundle lands the three staged improvements for OpenRoom ↔ Ope
   - `direct` is stable for pure delegation chat
   - `hybrid` is required when you expect OpenRoom apps to be actively driven in the same conversation
 
+5. **UI-First Routing + Upload Context + Action Reporting**
+- Router controls are now fully UI-driven in header (commands are optional fallback).
+- Added `New Session` for current main-agent lane (without typing `/oc ...`).
+- Added `Actions` toggle in header to enable/disable "Actions taken" stream.
+- Added `Upload` button in composer:
+  - text/code files: content snippet injected into prompt context
+  - small images: data URL attached into prompt context
+  - large/binary files: metadata-only attachment
+- This improves OpenClaw alignment for OpenRoom app tasks (Diary/Twitter/Email/CyberNews etc.) in `hybrid` mode.
+
 ## Apply
 
 ```bash
