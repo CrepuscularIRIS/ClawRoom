@@ -125,6 +125,15 @@ interface UploadedContextItem {
   context: string;
 }
 
+interface OpenRoomActionSpec {
+  openroom_actions?: Array<Record<string, unknown>>;
+}
+
+interface ParsedOpenRoomActions {
+  cleanedText: string;
+  actions: Array<Record<string, unknown>>;
+}
+
 function hasUsableLLMConfig(config: LLMConfig | null | undefined): config is LLMConfig {
   return !!config?.baseUrl.trim() && !!config.model.trim();
 }
@@ -159,6 +168,15 @@ const MAX_UPLOAD_ITEMS = 4;
 const MAX_UPLOAD_FILE_SIZE = 2 * 1024 * 1024;
 const MAX_UPLOAD_TEXT_CHARS = 12000;
 const MAX_UPLOAD_IMAGE_BYTES = 350 * 1024;
+const OPENROOM_ACTIONS_TAG = 'openroom_actions';
+const APP_NAME_ALIAS: Record<string, string> = {
+  music: 'musicplayer',
+  music_player: 'musicplayer',
+  musicapp: 'musicplayer',
+  freecall: 'freecell',
+  evidence_vault: 'evidencevault',
+  cybernews: 'cybernews',
+};
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -238,6 +256,72 @@ function compactText(input: string, maxChars = 1600): string {
   return normalized.length > maxChars ? `${normalized.slice(0, maxChars)}...` : normalized;
 }
 
+function tryParseOpenRoomActionSpec(raw: string): OpenRoomActionSpec | null {
+  try {
+    const parsed = JSON.parse(raw) as OpenRoomActionSpec;
+    if (Array.isArray(parsed?.openroom_actions)) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function extractOpenRoomActions(text: string): ParsedOpenRoomActions {
+  const raw = String(text || '');
+  if (!raw.trim()) return { cleanedText: '', actions: [] };
+
+  const fencedPattern = /```(?:json|openroom-actions)?\s*([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null = null;
+  while ((m = fencedPattern.exec(raw))) {
+    const candidate = (m[1] || '').trim();
+    const spec = tryParseOpenRoomActionSpec(candidate);
+    if (spec?.openroom_actions) {
+      const cleanedText = raw.replace(m[0], '').trim();
+      return { cleanedText, actions: spec.openroom_actions };
+    }
+  }
+
+  const xmlMatch = raw.match(/<openroom_actions>([\s\S]*?)<\/openroom_actions>/i);
+  if (xmlMatch) {
+    const spec = tryParseOpenRoomActionSpec((xmlMatch[1] || '').trim());
+    if (spec?.openroom_actions) {
+      const cleanedText = raw.replace(xmlMatch[0], '').trim();
+      return { cleanedText, actions: spec.openroom_actions };
+    }
+  }
+
+  const directSpec = tryParseOpenRoomActionSpec(raw.trim());
+  if (directSpec?.openroom_actions) {
+    return { cleanedText: '', actions: directSpec.openroom_actions };
+  }
+
+  return { cleanedText: raw, actions: [] };
+}
+
+function normalizeAppName(raw: unknown): string {
+  const value = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (!value) return '';
+  return APP_NAME_ALIAS[value] || value;
+}
+
+function resolveAppByName(raw: unknown) {
+  const normalized = normalizeAppName(raw);
+  if (!normalized) return null;
+  return (
+    APP_REGISTRY.find((app) => app.appName.toLowerCase() === normalized) ||
+    APP_REGISTRY.find((app) => app.displayName.toLowerCase().replace(/\s+/g, '_') === normalized) ||
+    null
+  );
+}
+
+function isSafeAppDataPath(raw: unknown): raw is string {
+  const path = String(raw || '').trim().replace(/^\/+/, '');
+  return Boolean(path) && path.startsWith('apps/') && !path.includes('..');
+}
+
 function buildOpenClawBridgeTask(
   agent: MainAgentId,
   userTask: string,
@@ -270,6 +354,17 @@ function buildOpenClawBridgeTask(
     '',
     '[User Task]',
     userTask,
+    '',
+    '[OpenRoom App Map]',
+    APP_REGISTRY.filter((app) => app.appName !== 'os')
+      .map((app) => `- ${app.appName} (id=${app.appId}, name=${app.displayName})`)
+      .join('\n'),
+    '',
+    '[OpenRoom Action Protocol]',
+    'If you need to operate OpenRoom apps, append ONE JSON block at the end:',
+    `{"${OPENROOM_ACTIONS_TAG}":[{"type":"open_app","app":"twitter"},{"type":"app_action","app":"twitter","action":"REFRESH"},{"type":"file_write","path":"apps/twitter/data/posts/a.json","content":"{...}"}]}`,
+    'Allowed action types: open_app, app_action, file_read, file_list, file_write, file_delete.',
+    'Rules: keep paths under apps/* only; keep response concise; do not fabricate tool results.',
   ].join('\n');
 }
 
@@ -1181,12 +1276,122 @@ const ChatPanel: React.FC<{
           if (result.sessionId) {
             setOpenClawSessions((prev) => ({ ...prev, [agent]: result.sessionId! }));
           }
-          const content = result.text || '';
+          const rawContent = result.text || '';
+          const parsedActions = extractOpenRoomActions(rawContent);
+          const actionLogs: string[] = [];
+
+          for (const item of parsedActions.actions) {
+            const actionType = String(item.type || '')
+              .trim()
+              .toLowerCase();
+            if (!actionType) continue;
+
+            if (actionType === 'open_app') {
+              const app = resolveAppByName(item.app);
+              if (!app) {
+                actionLogs.push(`open_app(error: unknown app "${String(item.app || '')}")`);
+                continue;
+              }
+              const osAction = resolveAppAction('os', 'OPEN_APP');
+              if (typeof osAction === 'string') {
+                actionLogs.push(`open_app(error: ${osAction})`);
+                continue;
+              }
+              const resultText = await dispatchAgentAction({
+                app_id: osAction.appId,
+                action_type: osAction.actionType,
+                params: { app_id: String(app.appId) },
+              });
+              actionLogs.push(`open_app(${app.appName}) => ${compactText(resultText, 120)}`);
+              continue;
+            }
+
+            if (actionType === 'app_action') {
+              const app = resolveAppByName(item.app);
+              const actionName = String(item.action || '').trim();
+              if (!app || !actionName) {
+                actionLogs.push('app_action(error: app/action required)');
+                continue;
+              }
+              const resolved = resolveAppAction(app.appName, actionName);
+              if (typeof resolved === 'string') {
+                actionLogs.push(`app_action(error: ${resolved})`);
+                continue;
+              }
+              const paramsRaw = item.params;
+              const params =
+                paramsRaw && typeof paramsRaw === 'object' && !Array.isArray(paramsRaw)
+                  ? Object.fromEntries(
+                      Object.entries(paramsRaw as Record<string, unknown>).map(([k, v]) => [
+                        k,
+                        typeof v === 'string' ? v : JSON.stringify(v),
+                      ]),
+                    )
+                  : {};
+              const resultText = await dispatchAgentAction({
+                app_id: resolved.appId,
+                action_type: resolved.actionType,
+                params,
+              });
+              actionLogs.push(`app_action(${app.appName}/${actionName}) => ${compactText(resultText, 120)}`);
+              continue;
+            }
+
+            if (actionType === 'file_read') {
+              if (!isSafeAppDataPath(item.path)) {
+                actionLogs.push('file_read(error: unsafe path)');
+                continue;
+              }
+              const resultText = await executeFileTool('file_read', { file_path: item.path });
+              actionLogs.push(`file_read(${String(item.path)}) => ${compactText(resultText, 120)}`);
+              continue;
+            }
+
+            if (actionType === 'file_list') {
+              if (!isSafeAppDataPath(item.path)) {
+                actionLogs.push('file_list(error: unsafe path)');
+                continue;
+              }
+              const resultText = await executeFileTool('file_list', { directory: item.path });
+              actionLogs.push(`file_list(${String(item.path)}) => ${compactText(resultText, 120)}`);
+              continue;
+            }
+
+            if (actionType === 'file_write') {
+              if (!isSafeAppDataPath(item.path)) {
+                actionLogs.push('file_write(error: unsafe path)');
+                continue;
+              }
+              const contentRaw = item.content;
+              const content =
+                typeof contentRaw === 'string' ? contentRaw : JSON.stringify(contentRaw ?? '', null, 2);
+              const resultText = await executeFileTool('file_write', {
+                file_path: item.path,
+                content,
+              });
+              actionLogs.push(`file_write(${String(item.path)}) => ${compactText(resultText, 120)}`);
+              continue;
+            }
+
+            if (actionType === 'file_delete') {
+              if (!isSafeAppDataPath(item.path)) {
+                actionLogs.push('file_delete(error: unsafe path)');
+                continue;
+              }
+              const resultText = await executeFileTool('file_delete', { file_path: item.path });
+              actionLogs.push(`file_delete(${String(item.path)}) => ${compactText(resultText, 120)}`);
+              continue;
+            }
+
+            actionLogs.push(`unsupported_action(${actionType})`);
+          }
+
+          const content = parsedActions.cleanedText || rawContent || '';
           addMessage({
             id: String(Date.now()),
             role: 'assistant',
             content,
-            toolCalls: [`delegate_to_main_agent(${agent})`],
+            toolCalls: [`delegate_to_main_agent(${agent})`, ...actionLogs],
             agent,
           });
           setOpenClawPages((prev) => ({ ...prev, [agent]: 0 }));
