@@ -61,23 +61,34 @@ function toToolDef(item: McpBridgeTool): ToolDef {
   const toolName = toMcpToolName(item.server, item.name);
   const hasObjectSchema = schema.type === 'object';
 
+  const normalizedParameters: ToolDef['function']['parameters'] = hasObjectSchema
+    ? {
+        type: 'object',
+        properties:
+          schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)
+            ? (schema.properties as Record<string, unknown>)
+            : {},
+        required: Array.isArray(schema.required)
+          ? schema.required.map((v) => String(v))
+          : [],
+      }
+    : {
+        type: 'object',
+        properties: {
+          payload_json: {
+            type: 'string',
+            description: 'JSON string payload for the MCP tool call',
+          },
+        },
+        required: [],
+      };
+
   return {
     type: 'function',
     function: {
       name: toolName,
       description: `[MCP:${item.server}] ${item.description || item.name}`,
-      parameters: hasObjectSchema
-        ? schema
-        : {
-            type: 'object',
-            properties: {
-              payload_json: {
-                type: 'string',
-                description: 'JSON string payload for the MCP tool call',
-              },
-            },
-            required: [],
-          },
+      parameters: normalizedParameters,
     },
   };
 }
