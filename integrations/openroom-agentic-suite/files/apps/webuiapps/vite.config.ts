@@ -336,18 +336,63 @@ function tryParseJson(raw: string): unknown | null {
   }
 }
 
+function tryParseJsonFromMixedOutput(raw: string): unknown | null {
+  const direct = tryParseJson(raw);
+  if (direct !== null) {
+    return direct;
+  }
+
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (!(line.startsWith('{') || line.startsWith('['))) {
+      continue;
+    }
+    const parsed = tryParseJson(line);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  const objStart = trimmed.indexOf('{');
+  const objEnd = trimmed.lastIndexOf('}');
+  if (objStart >= 0 && objEnd > objStart) {
+    const parsed = tryParseJson(trimmed.slice(objStart, objEnd + 1));
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 function extractPayloadText(payload: unknown): string {
   if (typeof payload !== 'object' || payload === null) return '';
   const obj = payload as {
     result?: { payloads?: Array<{ text?: string | null }> };
+    payloads?: Array<{ text?: string | null }>;
   };
-  const payloads = Array.isArray(obj.result?.payloads) ? obj.result?.payloads : [];
+  const payloads = Array.isArray(obj.result?.payloads)
+    ? obj.result?.payloads
+    : Array.isArray(obj.payloads)
+      ? obj.payloads
+      : [];
+  const texts: string[] = [];
   for (const p of payloads) {
     if (typeof p?.text === 'string' && p.text.trim()) {
-      return p.text.trim();
+      texts.push(p.text.trim());
     }
   }
-  return '';
+  return texts.length > 0 ? texts[texts.length - 1] : '';
 }
 
 async function collectRequestBody(req: NodeJS.ReadableStream): Promise<string> {
@@ -933,7 +978,7 @@ function openClawAgentBridgePlugin(): Plugin {
             });
 
             const stdout = (cmdResult.stdout || '').toString();
-            const parsed = tryParseJson(stdout);
+            const parsed = tryParseJsonFromMixedOutput(stdout);
             if (!parsed) {
               res.writeHead(502);
               res.end(
@@ -941,6 +986,7 @@ function openClawAgentBridgePlugin(): Plugin {
                   ok: false,
                   error: 'OpenClaw output is not valid JSON',
                   raw: stdout.slice(0, 2000),
+                  stderr: (cmdResult.stderr || '').toString().slice(0, 1000),
                 }),
               );
               return;
