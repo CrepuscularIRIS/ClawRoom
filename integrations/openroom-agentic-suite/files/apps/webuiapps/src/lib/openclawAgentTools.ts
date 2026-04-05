@@ -15,6 +15,9 @@ interface OpenClawAgentResponse {
 
 const TOOL_NAME = 'delegate_to_main_agent';
 export const MAIN_AGENTS: MainAgentId[] = ['lacia', 'methode', 'kouka', 'snowdrop', 'satonus'];
+const OPENCLAW_AGENT_ENDPOINT = '/api/openclaw-agent';
+const OPENCLAW_FETCH_TIMEOUT_MS = 180_000;
+const OPENCLAW_FETCH_RETRIES = 2;
 
 export interface OpenClawDelegateResult {
   ok: boolean;
@@ -65,6 +68,40 @@ export function isOpenClawTool(toolName: string): boolean {
   return toolName === TOOL_NAME;
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function postOpenClawAgent(
+  body: Record<string, unknown>,
+  headers: Record<string, string>,
+): Promise<Response> {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= OPENCLAW_FETCH_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), OPENCLAW_FETCH_TIMEOUT_MS);
+    try {
+      return await fetch(OPENCLAW_AGENT_ENDPOINT, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      lastError = err;
+      if (attempt < OPENCLAW_FETCH_RETRIES) {
+        await wait(400 * attempt);
+        continue;
+      }
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError || 'fetch failed'));
+}
+
 export async function executeOpenClawToolDetailed(
   params: Record<string, unknown>,
 ): Promise<OpenClawDelegateResult> {
@@ -100,15 +137,24 @@ export async function executeOpenClawToolDetailed(
     // ignore storage errors
   }
 
-  const res = await fetch('/api/openclaw-agent', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      agent,
-      message: task,
-      ...(sessionId ? { sessionId } : {}),
-    }),
-  });
+  let res: Response;
+  try {
+    res = await postOpenClawAgent(
+      {
+        agent,
+        message: task,
+        ...(sessionId ? { sessionId } : {}),
+      },
+      headers,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err || 'Failed to fetch');
+    return {
+      ok: false,
+      agent: targetAgent,
+      error: `openclaw bridge fetch failed: ${msg}. 请检查 OpenRoom 服务是否在线，并确认 /api/openclaw-agent 可访问。`,
+    };
+  }
 
   const raw = await res.text();
   let data: OpenClawAgentResponse | null = null;

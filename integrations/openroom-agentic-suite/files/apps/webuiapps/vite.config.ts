@@ -896,6 +896,15 @@ function openClawAgentBridgePlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use('/api/openclaw-agent', (req, res) => {
         res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-openclaw-bridge-token');
+        res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204);
+          res.end();
+          return;
+        }
 
         if (req.method !== 'POST') {
           res.writeHead(405);
