@@ -1,0 +1,19 @@
+{
+  "name": "@clawroom/adapter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ClawRoom Beatless runtime adapter — uniform agent state API for OpenRoom, CLI, REST, and webhook consumers.",
+  "bin": {
+    "clawroom-api": "./api/server.mjs"
+  },
+  "scripts": {
+    "start": "node api/server.mjs",
+    "start:auth": "node api/server.mjs --auth-token=$CLAWROOM_AUTH_TOKEN",
+    "dev": "node --watch api/server.mjs",
+    "probe:agents": "node -e \"import('./adapter/beatlessAdapter.mjs').then(async m => console.log(JSON.stringify(await m.collectAllAgentStates(), null, 2)))\""
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  }
+}
